@@ -27,7 +27,8 @@ cortex-m = "0.7"
 log = { version = "0.4", optional = true }
 
 [dependencies.smoltcp]
-version = "0.8"
+git = "https://github.com/smoltcp-rs/smoltcp.git"
+rev = "19a78bb5777037551f52babe32b592b738ebf91d"
 default-features = false
 features = ["medium-ethernet", "proto-ipv4"]
 optional = true
