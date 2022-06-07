@@ -18,6 +18,8 @@ const TXDESC_0_IC: u32 = 1 << 30;
 const TXDESC_0_FS: u32 = 1 << 28;
 /// Last segment of frame
 const TXDESC_0_LS: u32 = 1 << 29;
+/// Timestamp this packet
+const TXDESC_0_TIMESTAMP: u32 = 1 << 25;
 /// Transmit end of ring
 const TXDESC_0_TER: u32 = 1 << 21;
 /// Second address chained
@@ -107,6 +109,20 @@ impl TxDescriptor {
             self.desc.modify(0, |w| w | TXDESC_0_TER);
         }
     }
+
+    /// Enable PTP timestamping
+    fn set_timestamping(&mut self) {
+        unsafe {
+            self.desc.modify(0, |w| w | TXDESC_0_TIMESTAMP);
+        }
+    }
+
+    /// Enable TX interrupt
+    fn set_interrupt(&mut self) {
+        unsafe {
+            self.desc.modify(0, |w| w | TXDESC_0_IC);
+        }
+    }
 }
 
 pub type TxRingEntry = RingEntry<TxDescriptor>;
@@ -136,6 +152,9 @@ impl TxRingEntry {
 
         if !self.desc().is_owned() {
             self.desc_mut().set_buffer1_len(length);
+            self.desc_mut().set_timestamping();
+            self.desc_mut().set_interrupt();
+
             Some(TxPacket {
                 entry: self,
                 length,
