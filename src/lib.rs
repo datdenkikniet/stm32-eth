@@ -207,9 +207,12 @@ pub unsafe fn new_unchecked<'rx, 'tx>(
     while eth_dma.dmabmr.read().sr().bit_is_set() {}
 
     // Setup PTP timestamping
-    eth_ptp
-        .ptptscr
-        .write(|w| w.tse().set_bit().tsfcu().set_bit());
+    eth_ptp.ptptscr.write(|w| {
+        #[cfg(not(feature = "stm32f107"))]
+        let w = w.tsssr().set_bit().tssarfe().set_bit();
+
+        w.tse().set_bit().tsfcu().set_bit()
+    });
 
     // Set sub-second increment to 20ns and initial addend to HCLK/(1/20ns) (HCLK=100MHz)
     eth_ptp.ptpssir.write(|w| w.stssi().bits(20));
@@ -305,8 +308,13 @@ pub unsafe fn new_unchecked<'rx, 'tx>(
         .write(|w| w.tgfm().set_bit().tgfmscm().set_bit().tgfscm().set_bit());
 
     // bus mode register
-    eth_dma.dmabmr.modify(
-        |_, w|
+    eth_dma.dmabmr.modify(|_, w| {
+        // For any non-f107 chips, we must use
+        // enhanced descriptor format, as timestamps
+        // do not work without it
+        #[cfg(not(feature = "stm32f107"))]
+        let w = w.edfe().set_bit();
+
         // Address-aligned beats
         w.aab()
             .set_bit()
@@ -324,8 +332,8 @@ pub unsafe fn new_unchecked<'rx, 'tx>(
             .bits(0b01)
             // Use separate PBL
             .usp()
-            .set_bit(), // Enable enhanced descriptors
-    );
+            .set_bit()
+    });
 
     let mut dma = EthernetDMA {
         eth_dma,
