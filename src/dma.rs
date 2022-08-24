@@ -1,4 +1,5 @@
 use cortex_m::peripheral::NVIC;
+use stm32f1xx_hal::device::ETHERNET_PTP;
 
 use crate::{
     packet_id::IntoPacketId,
@@ -8,7 +9,6 @@ use crate::{
     PacketId, RxError, RxRingEntry, TxError, TxRingEntry,
 };
 
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[derive(Clone, Copy, Debug)]
 pub struct Timestamp {
     seconds: u32,
@@ -36,6 +36,28 @@ impl Timestamp {
     pub fn nanos(&self) -> u32 {
         let nanos = self.subseconds % Self::NANOS_PER_SECOND;
         nanos
+    }
+
+    pub fn as_nanos(&self) -> u64 {
+        self.subseconds as u64 + self.seconds as u64 * Self::NANOS_PER_SECOND as u64
+    }
+}
+
+impl core::fmt::Display for Timestamp {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let seconds = self.seconds();
+        let nanos = self.nanos();
+
+        f.write_fmt(format_args!("{}.{:09}", seconds, nanos))
+    }
+}
+
+#[cfg(feature = "defmt")]
+impl defmt::Format for Timestamp {
+    fn format(&self, fmt: defmt::Formatter) {
+        let seconds = self.seconds();
+        let nanos = self.nanos();
+        defmt::write!(fmt, "{}.{:09}", seconds, nanos)
     }
 }
 
@@ -172,6 +194,11 @@ impl<'rx, 'tx> EthernetDMA<'rx, 'tx> {
         status
     }
 
+    /// Collect TX timestamps
+    pub fn collect_timestamps(&mut self) {
+        self.tx_ring.collect_timestamps();
+    }
+
     /// Is Rx DMA currently running?
     ///
     /// It stops if the ring is full. Call `recv_next()` to free an
@@ -199,8 +226,56 @@ impl<'rx, 'tx> EthernetDMA<'rx, 'tx> {
         packet_id: Option<PacketId>,
         f: F,
     ) -> Result<R, TxError> {
+        let owned_count =
+            |ring: &TxRing| ring.entries.iter().filter(|e| e.desc().is_owned()).count();
+
+        defmt::info!(
+            "Before TPSS: {} (transmit process stopped)",
+            self.eth_dma.dmasr.read().tpss().bit_is_set(),
+        );
+        defmt::info!(
+            "Before TBUS: {} (transmit buffer unavailable)",
+            self.eth_dma.dmasr.read().tbus().bit_is_set()
+        );
+        defmt::info!(
+            "TPS: {}",
+            match self.eth_dma.dmasr.read().tps().bits() {
+                0b000 => "Stopped; Reset or stop transmit command issued",
+                0b001 => "Running; Fetching transmit transfer descriptor",
+                0b010 => "Running; Waiting for status",
+                0b011 => "Running; Reading data from host memory buffer and queueing into transmit buffer",
+                0b110 => "Suspended; Transmit descriptor unavailable or transmit buffer underflow",
+                0b111 => "Running; Closing transmit descriptor",
+                _ => unreachable!()
+            }
+        );
+        defmt::info!("Owned count: {}", owned_count(&self.tx_ring));
+
         let result = self.tx_ring.send(length, packet_id.map(|p| p.into()), f);
         self.tx_ring.demand_poll(&self.eth_dma);
+
+        defmt::info!(
+            "After  TPSS: {} (transmit process stopped)",
+            self.eth_dma.dmasr.read().tpss().bit_is_set(),
+        );
+        defmt::info!(
+            "After  TBUS: {} (transmit buffer unavailable)",
+            self.eth_dma.dmasr.read().tbus().bit_is_set()
+        );
+        defmt::info!(
+            "TPS: {}",
+            match self.eth_dma.dmasr.read().tps().bits() {
+                0b000 => "Stopped; Reset or stop transmit command issued",
+                0b001 => "Running; Fetching transmit transfer descriptor",
+                0b010 => "Running; Waiting for status",
+                0b011 => "Running; Reading data from host memory buffer and queueing into transmit buffer",
+                0b110 => "Suspended; Transmit descriptor unavailable or transmit buffer underflow",
+                0b111 => "Running; Closing transmit descriptor",
+                _ => unreachable!()
+            }
+        );
+        defmt::info!("Owned count: {}", owned_count(&self.tx_ring));
+
         result
     }
 
@@ -242,6 +317,8 @@ pub struct InterruptReasonSummary {
 /// * Via the [`EthernetDMA`](struct.EthernetDMA.html) driver instance that your interrupt handler has access to.
 /// * By unsafely getting `Peripherals`.
 pub fn eth_interrupt_handler(eth_dma: &ETHERNET_DMA) -> InterruptReasonSummary {
+    let _eth_ptp = unsafe { &*ETHERNET_PTP::ptr() };
+
     let status = eth_dma.dmasr.read();
 
     let status = InterruptReasonSummary {

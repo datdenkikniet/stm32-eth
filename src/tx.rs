@@ -83,6 +83,13 @@ impl TxDescriptor {
 
     /// Pass ownership to the DMA engine
     fn set_owned(&mut self) {
+        defmt::info!(
+            "Before B1: {:08X}, B2: {:08X}, {}",
+            self.desc.read(2),
+            self.desc.read(3),
+            self.is_owned(),
+        );
+
         self.write_buffer1();
         self.write_buffer2();
 
@@ -98,6 +105,13 @@ impl TxDescriptor {
         // DMA.
         // #[cfg(feature = "fence")]
         atomic::fence(Ordering::SeqCst);
+
+        defmt::info!(
+            "After  B1: {:08X}, B2: {:08X}, {}",
+            self.desc.read(2),
+            self.desc.read(3),
+            self.is_owned(),
+        );
     }
 
     #[allow(unused)]
@@ -153,17 +167,31 @@ impl TxDescriptor {
 
         let contains_timestamp = (tdes0 & TXDESC_0_TIMESTAMP_STATUS) == TXDESC_0_TIMESTAMP_STATUS;
 
+        #[cfg(not(feature = "stm32f107"))]
+        let (seconds, subseconds) = { (self.desc.read(7), self.desc.read(6)) };
+
+        #[cfg(feature = "stm32f107")]
+        let (seconds, subseconds) = { (self.desc.read(3), self.desc.read(2)) };
+
+        let timestamp = Timestamp::new(seconds, subseconds);
+
+        if contains_timestamp {
+            defmt::info!(
+                "Timestamp that was recovered: {}. Owned: {}",
+                timestamp,
+                self.is_owned()
+            );
+        }
+
         if !self.is_owned() && contains_timestamp && Self::is_last(tdes0) {
-            #[cfg(not(feature = "stm32f107"))]
-            let (seconds, subseconds) = { (self.desc.read(7), self.desc.read(6)) };
-            #[cfg(feature = "stm32f107")]
-            let (seconds, subseconds) = { (self.desc.read(3), self.desc.read(2)) };
-
-            let timestamp = Timestamp::new(seconds, subseconds);
-
             // Clear the timestamp status bit, because we're currently reading it
             unsafe {
-                self.desc.write(0, tdes0 & !(TXDESC_0_TIMESTAMP_STATUS));
+                self.desc.modify(0, |w| {
+                    w & !(TXDESC_0_TIMESTAMP_STATUS
+                        | TXDESC_0_TIMESTAMP_ENABLE
+                        | TXDESC_0_LS
+                        | TXDESC_0_FS)
+                });
             }
 
             Some(timestamp)
