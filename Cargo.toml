@@ -97,5 +97,8 @@ name = "rtic-echo"
 required-features = [ "rtic-echo-example" ]
 
 [profile.release]
-debug = 2
+panic = "abort"
+codegen-units = 1
+debug = true
 lto = true
+opt-level = "s"
