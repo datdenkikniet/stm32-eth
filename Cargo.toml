@@ -30,7 +30,9 @@ log = { version = "0.4", optional = true }
 defmt = { version = "0.3", optional = true }
 
 [dependencies.smoltcp]
-version = "0.8"
+# version = "0.8"
+git = "https://github.com/datdenkikniet/smoltcp.git"
+branch = "master"
 default-features = false
 features = ["medium-ethernet", "proto-ipv4"]
 optional = true
@@ -65,7 +67,7 @@ smoltcp-phy = ["smoltcp"]
 
 # Example features
 example-nucleo-pins = [ ]
-rtic-echo-example = [ "defmt", "smoltcp-phy", "smoltcp/defmt", "smoltcp/medium-ethernet", "smoltcp/socket-tcp" ]
+rtic-echo-example = [ "defmt", "smoltcp-phy", "smoltcp/defmt", "smoltcp/medium-ethernet", "smoltcp/socket-tcp", "smoltcp/socket-dhcpv4" ]
 
 [dev-dependencies]
 cortex-m = "0.7"

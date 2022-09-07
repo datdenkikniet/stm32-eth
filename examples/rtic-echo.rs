@@ -30,9 +30,9 @@ mod app {
     use stm32_eth::{EthernetDMA, RxRingEntry, TxRingEntry};
 
     use smoltcp::{
-        iface::{self, Interface, SocketHandle},
-        socket::TcpSocket,
-        socket::{TcpSocketBuffer, TcpState},
+        iface::{self, Interface, SocketHandle, SocketSet},
+        socket::tcp::Socket as TcpSocket,
+        socket::{tcp::SocketBuffer as TcpSocketBuffer, tcp::State as TcpState},
         wire::EthernetAddress,
     };
 
@@ -40,8 +40,11 @@ mod app {
 
     #[local]
     struct Local {
-        interface: Interface<'static, &'static mut EthernetDMA<'static, 'static>>,
+        interface: Interface<'static>,
+        device: &'static mut EthernetDMA<'static, 'static>,
+        sockets: SocketSet<'static>,
         tcp_handle: SocketHandle,
+        dhcp_handle: SocketHandle,
     }
 
     #[shared]
@@ -90,7 +93,7 @@ mod app {
         )
         .unwrap();
 
-        let dma = cx.local.dma.write(dma);
+        let mut dma = cx.local.dma.write(dma);
 
         defmt::info!("Enabling interrupts");
         dma.enable_interrupt();
@@ -110,19 +113,25 @@ mod app {
 
         let socket = TcpSocket::new(rx_buffer, tx_buffer);
 
-        let mut interface = iface::InterfaceBuilder::new(dma, &mut store.sockets[..])
+        let mut interface = iface::InterfaceBuilder::new()
             .hardware_addr(EthernetAddress::from_bytes(&crate::MAC).into())
             .neighbor_cache(neighbor_cache)
             .ip_addrs(&mut store.ip_addrs[..])
             .routes(routes)
-            .finalize();
+            .finalize(&mut dma);
 
-        let tcp_handle = interface.add_socket(socket);
+        let mut socket_storage = SocketSet::new(&mut store.sockets[..]);
 
-        let socket = interface.get_socket::<TcpSocket>(tcp_handle);
+        let tcp_handle = socket_storage.add(socket);
+
+        let dhcp_handle = socket_storage.add(smoltcp::socket::dhcpv4::Socket::new());
+
+        let socket = socket_storage.get_mut::<TcpSocket>(tcp_handle);
         socket.listen(crate::ADDRESS).ok();
 
-        interface.poll(now_fn()).unwrap();
+        interface
+            .poll(now_fn(), &mut dma, &mut socket_storage)
+            .unwrap();
 
         if let Ok(mut phy) = EthernetPhy::from_miim(mac, 0) {
             defmt::info!(
@@ -141,22 +150,39 @@ mod app {
             Shared {},
             Local {
                 interface,
+                device: dma,
+                sockets: socket_storage,
                 tcp_handle,
+                dhcp_handle,
             },
             init::Monotonics(mono),
         )
     }
 
-    #[task(binds = ETH, local = [interface, tcp_handle, data: [u8; 512] = [0u8; 512]], priority = 2)]
+    #[task(binds = ETH, local = [interface, tcp_handle, device, sockets, dhcp_handle, data: [u8; 512] = [0u8; 512]], priority = 2)]
     fn eth_interrupt(cx: eth_interrupt::Context) {
-        let (iface, tcp_handle, buffer) = (cx.local.interface, cx.local.tcp_handle, cx.local.data);
+        let (iface, tcp_handle, dhcp_handle, buffer, device, sockets) = (
+            cx.local.interface,
+            cx.local.tcp_handle,
+            cx.local.dhcp_handle,
+            cx.local.data,
+            cx.local.device,
+            cx.local.sockets,
+        );
 
-        let interrupt_reason = iface.device_mut().interrupt_handler();
+        let interrupt_reason = device.interrupt_handler();
         defmt::debug!("Got an ethernet interrupt! Reason: {}", interrupt_reason);
 
-        iface.poll(now_fn()).ok();
+        iface.poll(now_fn(), device, sockets).ok();
 
-        let socket = iface.get_socket::<TcpSocket>(*tcp_handle);
+        if let Some(event) = sockets
+            .get_mut::<smoltcp::socket::dhcpv4::Socket>(*dhcp_handle)
+            .poll()
+        {
+            defmt::info!("{}", event);
+        }
+
+        let socket = sockets.get_mut::<TcpSocket>(*tcp_handle);
         if let Ok(recv_bytes) = socket.recv_slice(buffer) {
             if recv_bytes > 0 {
                 socket.send_slice(&buffer[..recv_bytes]).ok();
@@ -170,14 +196,14 @@ mod app {
             defmt::warn!("Disconnected... Reopening listening socket.");
         }
 
-        iface.poll(now_fn()).ok();
+        iface.poll(now_fn(), device, sockets).ok();
     }
 }
 
 /// All storage required for networking
 pub struct NetworkStorage {
     pub ip_addrs: [wire::IpCidr; 1],
-    pub sockets: [iface::SocketStorage<'static>; 1],
+    pub sockets: [iface::SocketStorage<'static>; 2],
     pub tcp_socket_storage: TcpSocketStorage,
     pub neighbor_cache: [Option<(wire::IpAddress, iface::Neighbor)>; 8],
     pub routes_cache: [Option<(wire::IpCidr, iface::Route)>; 8],
@@ -192,7 +218,7 @@ impl NetworkStorage {
             ip_addrs: [Self::IP_INIT],
             neighbor_cache: [None; 8],
             routes_cache: [None; 8],
-            sockets: [SocketStorage::EMPTY; 1],
+            sockets: [SocketStorage::EMPTY; 2],
             tcp_socket_storage: TcpSocketStorage::new(),
         }
     }
