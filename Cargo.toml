@@ -32,7 +32,7 @@ defmt = { version = "0.3", optional = true }
 [dependencies.smoltcp]
 # version = "0.8"
 git = "https://github.com/datdenkikniet/smoltcp.git"
-branch = "master"
+branch = "dhcp_vec"
 default-features = false
 features = ["medium-ethernet", "proto-ipv4"]
 optional = true
