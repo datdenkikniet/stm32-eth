@@ -1,7 +1,7 @@
 use crate::{
     desc::Descriptor,
     hal::rcc::Clocks,
-    stm32::{ETHERNET_MAC, ETHERNET_PTP},
+    peripherals::{ETHERNET_MAC, ETHERNET_PTP},
 };
 
 /// A timestamp produced by the PTP periperhal

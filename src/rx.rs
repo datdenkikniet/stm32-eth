@@ -1,4 +1,4 @@
-use crate::{dma::TimestampError, ptp::Timestamp, stm32::ETHERNET_DMA, PacketId};
+use crate::{dma::TimestampError, peripherals::ETHERNET_DMA, ptp::Timestamp, PacketId};
 
 use core::{
     ops::{Deref, DerefMut},

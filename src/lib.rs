@@ -78,6 +78,9 @@ use ptp::setup_ptp;
 #[cfg(feature = "device-selected")]
 pub use ptp::Timestamp;
 
+#[cfg(feature = "device-selected")]
+mod peripherals;
+
 #[cfg(all(feature = "smoltcp-phy", feature = "device-selected"))]
 pub use smoltcp;
 #[cfg(all(feature = "smoltcp-phy", feature = "device-selected"))]
@@ -133,13 +136,15 @@ where
     // Set up the clocks and reset the MAC periperhal
     setup::setup();
 
+    let eth_mac = eth_mac.into();
+
     // Congfigure and start up the ethernet DMA.
     // Note: this _must_ happen before configuring the MAC.
     // It's not entirely clear why, but no interrupts are
     // generated if the order is reversed.
-    let dma = EthernetDMA::new(eth_dma, &eth_mac, rx_buffer, tx_buffer);
+    let dma = EthernetDMA::new(eth_dma.into(), &eth_mac, rx_buffer, tx_buffer);
 
-    setup_ptp(&eth_mac, eth_ptp, clocks);
+    setup_ptp(&eth_mac, eth_ptp.into(), clocks);
 
     let speed = initial_speed.unwrap_or(Speed::FullDuplexBase100Tx);
 
@@ -197,13 +202,15 @@ where
     // Set up the clocks and reset the MAC periperhal
     setup::setup();
 
+    let eth_mac = eth_mac.into();
+
     // Congfigure and start up the ethernet DMA.
     // Note: this _must_ happen before configuring the MAC.
     // It's not entirely clear why, but no interrupts are
     // generated if the order is reversed.
-    let dma = EthernetDMA::new(eth_dma, &eth_mac, rx_buffer, tx_buffer);
+    let dma = EthernetDMA::new(eth_dma.into(), &eth_mac, rx_buffer, tx_buffer);
 
-    setup_ptp(&eth_mac, eth_ptp, clocks);
+    setup_ptp(&eth_mac, eth_ptp.into(), clocks);
 
     let speed = initial_speed.unwrap_or(Speed::FullDuplexBase100Tx);
 
