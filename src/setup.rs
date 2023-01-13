@@ -12,8 +12,7 @@ use stm32f4xx_hal::{
         gpiob::{PB11, PB12, PB13},
         gpioc::{PC4, PC5},
         gpiog::{PG11, PG13, PG14},
-        Input,
-        Speed::VeryHigh,
+        Input, Speed,
     },
     pac::{RCC, SYSCFG},
 };
@@ -27,8 +26,7 @@ use stm32f7xx_hal::{
         gpiob::{PB11, PB12, PB13},
         gpioc::{PC4, PC5},
         gpiog::{PG11, PG13, PG14},
-        Input,
-        Speed::VeryHigh,
+        Input, Speed,
     },
     pac::{RCC, SYSCFG},
 };
@@ -227,7 +225,7 @@ macro_rules! impl_pins {
 
                 impl AlternateVeryHighSpeed for $pin {
                     fn into_af11_very_high_speed(self) {
-                        self.into_alternate::<11>().set_speed(VeryHigh);
+                        self.into_alternate::<11>().set_speed(Speed::Medium);
                     }
                 }
             )+
