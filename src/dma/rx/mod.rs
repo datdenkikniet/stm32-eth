@@ -301,6 +301,7 @@ impl<'data, STATE> RxRing<'data, STATE> {
 }
 
 /// Running state of the `RxRing`
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[derive(PartialEq, Eq, Debug)]
 pub enum RunningState {
     Unknown,

@@ -34,9 +34,12 @@ siphasher = "*"
 paste = { version = "1.0", optional = true }
 
 [dependencies.smoltcp]
-version = "0.9"
+# version = "0.8.2"
+git = "https://github.com/datdenkikniet/smoltcp.git"
+branch = "unique_packet_id"
 default-features = false
 optional = true
+features = [ "packet-id" ]
 
 [features]
 default = [ "defmt", "ptp" ]
@@ -83,7 +86,7 @@ cortex-m-rtic = "1.0"
 defmt-rtt = "0.4"
 panic-probe = { version = "0.3", features = [ "print-defmt" ] }
 systick-monotonic = "1.0"
-smoltcp = { version = "0.9", features = [ "medium-ethernet", "proto-ipv4", "socket-udp", "socket-tcp", "defmt" ], default-features = false }
+smoltcp = { git = "https://github.com/datdenkikniet/smoltcp.git", branch = "unique_packet_id", features = [ "medium-ethernet", "proto-ipv4", "socket-udp", "socket-tcp", "defmt", "packet-id" ], default-features = false }
 
 [[example]]
 name = "pktgen"
@@ -103,6 +106,14 @@ required-features = [ "defmt" , "smoltcp-phy" ]
 
 [[example]]
 name = "rtic-timestamp"
+required-features = [ "defmt", "ptp" ]
+
+[[example]]
+name = "client"
+required-features = [ "defmt", "ptp" ]
+
+[[example]]
+name = "server"
 required-features = [ "defmt", "ptp" ]
 
 [profile.release]
