@@ -40,6 +40,7 @@ mod app {
     use fugit::ExtU64;
 
     use ieee802_3_miim::{phy::PhySpeed, Phy};
+    use nonmax::NonMaxU32;
     use systick_monotonic::Systick;
 
     use stm32_eth::{
@@ -166,14 +167,18 @@ mod app {
         let tx_id_ctr = cx.local.tx_id_ctr;
         (cx.shared.dma, cx.shared.tx_id).lock(|dma, tx_id| {
             let tx_id_val = *tx_id_ctr;
-            dma.send(SIZE, Some(PacketId(tx_id_val)), |buf| {
-                // Write the Ethernet Header and the current timestamp value to
-                // the frame.
-                buf[0..6].copy_from_slice(&DST_MAC);
-                buf[6..12].copy_from_slice(&SRC_MAC);
-                buf[12..14].copy_from_slice(&ETH_TYPE);
-                buf[14..22].copy_from_slice(&now.raw().to_be_bytes());
-            })
+            dma.send(
+                SIZE,
+                Some(PacketId(NonMaxU32::new(tx_id_val).unwrap())),
+                |buf| {
+                    // Write the Ethernet Header and the current timestamp value to
+                    // the frame.
+                    buf[0..6].copy_from_slice(&DST_MAC);
+                    buf[6..12].copy_from_slice(&SRC_MAC);
+                    buf[12..14].copy_from_slice(&ETH_TYPE);
+                    buf[14..22].copy_from_slice(&now.raw().to_be_bytes());
+                },
+            )
             .unwrap();
             *tx_id = Some((tx_id_val, now));
             *tx_id_ctr += 1;
@@ -286,7 +291,9 @@ mod app {
 
                 if interrupt_summary.is_tx {
                     if let Some((tx_id, sent_time)) = tx_id.take() {
-                        if let Ok(ts) = dma.get_timestamp_for_id(PacketId(tx_id)) {
+                        if let Ok(ts) =
+                            dma.get_timestamp_for_id(PacketId(NonMaxU32::new(tx_id).unwrap()))
+                        {
                             defmt::info!("TX timestamp: {}", ts);
                             defmt::debug!(
                         "Diff between TX timestamp and the time that was put into the packet: {}",

@@ -1,5 +1,3 @@
-use nonmax::NonMaxU16;
-
 const MTU: usize = 1522;
 
 mod buffer_ring;
@@ -16,7 +14,7 @@ pub trait DescriptorEntry {
 }
 
 pub trait SettableDescriptorEntry: DescriptorEntry {
-    /// Set the buffer of this entry to `buffer`.
+    /// Set the buffer of this entry to `buffer`, or clears it.
     fn set_buffer(&mut self, buffer: Buffer);
 }
 
@@ -37,10 +35,6 @@ impl<'data, T> EntryRing<'data, T> {
         self.entries.len()
     }
 
-    pub(crate) fn buffer_count(&self) -> NonMaxU16 {
-        self.buffers.buffer_count()
-    }
-
     pub(crate) fn entry_count(&self) -> u16 {
         self.entries.len() as u16
     }
@@ -50,6 +44,7 @@ impl<'data, T> EntryRing<'data, T> {
         &self.entries[index]
     }
 
+    #[allow(unused)]
     pub(crate) fn entry_mut(&mut self, index: usize) -> &mut T {
         &mut self.entries[index]
     }
@@ -84,10 +79,6 @@ impl<'data, T> EntryRing<'data, T> {
 
     pub(crate) fn buffer_size(&self) -> usize {
         self.buffers.buffer_len()
-    }
-
-    pub(crate) fn next_buffer(&mut self) -> Option<Buffer> {
-        self.buffers.next_buffer()
     }
 
     pub(crate) fn free(&mut self, index: BufferIndex) {

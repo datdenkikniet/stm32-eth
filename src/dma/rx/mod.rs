@@ -98,9 +98,6 @@ impl<'data> RxRing<'data, NotRunning> {
     pub fn start(mut self, eth_dma: &ETHERNET_DMA) -> RxRing<'data, Running> {
         // Setup ring
         self.ring.buffers_and_entries(|entry, buffer| {
-            if let Some(buffer) = &buffer {
-                defmt::trace!("Setting up buffer {}", buffer.idx());
-            }
             entry.setup(buffer);
         });
 
@@ -140,9 +137,9 @@ impl<'data> RxRing<'data, NotRunning> {
                 .write(|w| w.rdrl().variant((self.ring.entry_count() - 1) as u16));
 
             // Set the tail pointer
-            eth_dma
-                .dmacrx_dtpr
-                .write(|w| unsafe { w.bits(self.ring.last_entry_mut() as *const _ as u32) });
+            eth_dma.dmacrx_dtpr.write(|w| unsafe {
+                w.bits((self.ring.last_entry_mut() as *const RxDescriptor).add(1) as u32)
+            });
 
             // Set receive buffer size
             let receive_buffer_size = self.ring.buffer_size() as u16;
@@ -237,52 +234,22 @@ impl<'data> RxRing<'data, Running> {
         }
 
         #[cfg(all(feature = "ptp", feature = "stm32h7xx-hal"))]
-        let (timestamp, descriptor, buffer) = {
-            if res.is_ok() {
-                let desc_has_timestamp = descriptor.has_timestamp();
-
-                drop(descriptor);
-
-                // On H7's, the timestamp is stored in the next Context
-                // descriptor.
-                let ctx_descriptor = self.ring.entry(self.next_entry);
-
-                let timestamp = if desc_has_timestamp {
-                    if let Some(timestamp) = ctx_descriptor.read_timestamp() {
-                        Some(timestamp)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-
-                if let Some((ctx_descriptor, ctx_des_buffer)) =
-                    self.ring.entry_and_next_buffer(self.next_entry)
-                {
-                    if !ctx_descriptor.is_owned() {
-                        // Advance over this buffer
-                        self.next_entry = (self.next_entry + 1) % entries_len;
-                        ctx_descriptor.set_owned(ctx_des_buffer);
-                    }
-                }
-
-                let descriptor = self.ring.entry_mut(entry);
-
-                descriptor.attach_timestamp(timestamp);
-
-                (timestamp, descriptor, buffer)
-            } else {
-                let descriptor = self.ring.entry_mut(entry);
-                descriptor.attach_timestamp(None);
-                (None, descriptor, buffer)
-            }
+        // On H7's, the timestamp is stored in the next Context
+        // descriptor.
+        let context_entry = if res.is_ok() && descriptor.has_timestamp() {
+            let entry = self.next_entry;
+            self.next_entry = (self.next_entry + 1) % entries_len;
+            Some(entry)
+        } else {
+            None
         };
 
         res.map(move |_| RxPacket {
-            entry,
+            descriptor: entry,
             buffer,
             ring: self,
+            #[cfg(all(feature = "ptp", feature = "stm32h7xx-hal"))]
+            context_descriptor: context_entry,
         })
     }
 
@@ -327,8 +294,10 @@ impl RunningState {
 /// This packet implements [Deref<\[u8\]>](core::ops::Deref) and should be used
 /// as a slice.
 pub struct RxPacket<'a, 'ring> {
-    entry: usize,
+    descriptor: usize,
     buffer: Buffer,
+    #[cfg(all(feature = "ptp", feature = "stm32h7xx-hal"))]
+    context_descriptor: Option<usize>,
     ring: &'a mut RxRing<'ring, Running>,
 }
 
@@ -339,13 +308,15 @@ impl RxPacket<'_, '_> {
     }
 
     fn frame_length(&self) -> usize {
-        self.ring.ring.entry(self.entry).frame_length()
+        self.ring.ring.entry(self.descriptor).frame_length()
     }
 
     /// Get the timestamp associated with this packet
     #[cfg(feature = "ptp")]
     pub fn timestamp(&self) -> Option<Timestamp> {
-        self.timestamp
+        self.context_descriptor
+            .map(|ctx| self.ring.ring.entry(ctx).read_timestamp())
+            .flatten()
     }
 }
 
@@ -367,7 +338,38 @@ impl core::ops::DerefMut for RxPacket<'_, '_> {
 impl Drop for RxPacket<'_, '_> {
     fn drop(&mut self) {
         self.ring.ring.free(self.buffer.idx());
-        self.ring.ring.attach_free_buffers(self.entry + 1);
+
+        #[cfg(all(feature = "ptp", feature = "stm32h7xx-hal"))]
+        if let Some(ctxt) = self.context_descriptor {
+            // Read the timestamp associated with this packet
+            let timestamp = self.timestamp();
+            self.ring
+                .ring
+                .entry_mut(self.descriptor)
+                .attach_timestamp(timestamp);
+
+            // Free the buffer associated with this context descriptor, if any
+            if let Some((_, ctxt_buffer)) = self.ring.ring.entry_buffer(ctxt) {
+                self.ring.ring.free(ctxt_buffer.idx());
+            }
+        }
+
+        #[cfg(any(
+            feature = "f-series",
+            all(not(feature = "ptp"), feature = "stm32h7xx-hal")
+        ))]
+        let skip_descs = 1;
+
+        #[cfg(all(feature = "ptp", feature = "stm32h7xx-hal"))]
+        let skip_descs = if self.context_descriptor.is_some() {
+            2
+        } else {
+            1
+        };
+
+        self.ring
+            .ring
+            .attach_free_buffers(self.descriptor + skip_descs);
         self.ring.demand_poll();
     }
 }

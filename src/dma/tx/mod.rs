@@ -137,9 +137,9 @@ impl<'data> TxRing<'data, NotRunning> {
                 .write(|w| w.tdrl().variant((self.ring.entries().count() - 1) as u16));
 
             // Set the tail pointer
-            eth_dma
-                .dmactx_dtpr
-                .write(|w| unsafe { w.bits(self.ring.last_entry_mut() as *const _ as u32) });
+            eth_dma.dmactx_dtpr.write(|w| unsafe {
+                w.bits((self.ring.last_entry_mut() as *const TxDescriptor).add(1) as u32)
+            });
         }
 
         // "Preceding reads and writes cannot be moved past subsequent writes."

@@ -68,45 +68,45 @@ fn main() -> ! {
         }
 
         if link_up {
-            const SIZE: usize = 42;
+            // const SIZE: usize = 42;
 
-            const DST_MAC: [u8; 6] = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
-            const SRC_MAC: [u8; 6] = [0x00, 0x00, 0xDE, 0xAD, 0xBE, 0xEF];
-            const ETH_TYPE: [u8; 2] = [0x08, 0x06]; // ARP
-            const HTYPE: [u8; 2] = [0x00, 0x01]; // Hardware Type: ethernet
-            const PTYPE: [u8; 2] = [0x08, 0x00]; // IP
-            const HLEN: [u8; 1] = [0x06]; // MAC length
-            const PLEN: [u8; 1] = [0x04]; // IPv4
-            const OPER: [u8; 2] = [0x00, 0x01]; // Operation: request
-            const SENDER_IP: [u8; 4] = [0x0A, 00, 0x00, 0x0A]; // 10.0.0.10
-            const TARGET_MAC: [u8; 6] = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-            const TARGET_IP: [u8; 4] = [0x0A, 0x00, 0x00, 0x02]; // 10.0.0.2
+            // const DST_MAC: [u8; 6] = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+            // const SRC_MAC: [u8; 6] = [0x00, 0x00, 0xDE, 0xAD, 0xBE, 0xEF];
+            // const ETH_TYPE: [u8; 2] = [0x08, 0x06]; // ARP
+            // const HTYPE: [u8; 2] = [0x00, 0x01]; // Hardware Type: ethernet
+            // const PTYPE: [u8; 2] = [0x08, 0x00]; // IP
+            // const HLEN: [u8; 1] = [0x06]; // MAC length
+            // const PLEN: [u8; 1] = [0x04]; // IPv4
+            // const OPER: [u8; 2] = [0x00, 0x01]; // Operation: request
+            // const SENDER_IP: [u8; 4] = [0x0A, 00, 0x00, 0x0A]; // 10.0.0.10
+            // const TARGET_MAC: [u8; 6] = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+            // const TARGET_IP: [u8; 4] = [0x0A, 0x00, 0x00, 0x02]; // 10.0.0.2
 
-            let r = dma.send(SIZE, None, |buf| {
-                buf[0..6].copy_from_slice(&DST_MAC);
-                buf[6..12].copy_from_slice(&SRC_MAC);
-                buf[12..14].copy_from_slice(&ETH_TYPE);
-                buf[14..16].copy_from_slice(&HTYPE);
+            // let r = dma.send(SIZE, None, |buf| {
+            //     buf[0..6].copy_from_slice(&DST_MAC);
+            //     buf[6..12].copy_from_slice(&SRC_MAC);
+            //     buf[12..14].copy_from_slice(&ETH_TYPE);
+            //     buf[14..16].copy_from_slice(&HTYPE);
 
-                buf[16..18].copy_from_slice(&PTYPE);
-                buf[18..19].copy_from_slice(&HLEN);
-                buf[19..20].copy_from_slice(&PLEN);
-                buf[20..22].copy_from_slice(&OPER);
-                buf[22..28].copy_from_slice(&SRC_MAC);
-                buf[28..32].copy_from_slice(&SENDER_IP);
+            //     buf[16..18].copy_from_slice(&PTYPE);
+            //     buf[18..19].copy_from_slice(&HLEN);
+            //     buf[19..20].copy_from_slice(&PLEN);
+            //     buf[20..22].copy_from_slice(&OPER);
+            //     buf[22..28].copy_from_slice(&SRC_MAC);
+            //     buf[28..32].copy_from_slice(&SENDER_IP);
 
-                buf[32..38].copy_from_slice(&TARGET_MAC);
-                buf[38..42].copy_from_slice(&TARGET_IP);
-            });
+            //     buf[32..38].copy_from_slice(&TARGET_MAC);
+            //     buf[38..42].copy_from_slice(&TARGET_IP);
+            // });
 
-            match r {
-                Ok(()) => {
-                    defmt::info!("ARP sent");
-                }
-                Err(e) => {
-                    defmt::info!("ARP failed. {}, {}", e, dma.tx_state())
-                }
-            }
+            // match r {
+            //     Ok(()) => {
+            //         defmt::info!("ARP sent");
+            //     }
+            //     Err(e) => {
+            //         defmt::info!("ARP failed. {}, {}", e, dma.tx_state())
+            //     }
+            // }
 
             loop {
                 use core::hash::{Hash, Hasher};

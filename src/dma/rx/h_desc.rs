@@ -130,7 +130,7 @@ impl RxDescriptor {
         self.buffer_index = None;
         #[cfg(feature = "ptp")]
         {
-            self.timestamp = None;
+            self.cached_timestamp = None;
         }
 
         if let Some(buffer) = buffer {
@@ -157,7 +157,7 @@ impl RxDescriptor {
         self.inner_raw.read(3) & RXDESC_3_LD == RXDESC_3_LD
     }
 
-    fn is_context(&self) -> bool {
+    pub(super) fn is_context(&self) -> bool {
         self.inner_raw.read(3) & RXDESC_3_CTXT == RXDESC_3_CTXT
     }
 
@@ -184,8 +184,11 @@ impl RxDescriptor {
         atomic::compiler_fence(Ordering::Release);
 
         unsafe {
-            self.inner_raw
-                .modify(3, |w| w | RXDESC_3_OWN | RXDESC_3_IOC);
+            self.inner_raw.modify(3, |w| {
+                let w = w | RXDESC_3_OWN | RXDESC_3_IOC;
+                let w = w & !(RXDESC_3_CTXT);
+                w
+            });
         }
 
         // Used to flush the store buffer as fast as possible to make the buffer available for the
@@ -237,6 +240,10 @@ impl RxDescriptor {
 
 #[cfg(feature = "ptp")]
 impl RxDescriptor {
+    pub(super) fn has_timestamp(&self) -> bool {
+        (self.inner_raw.read(1) & RXDESC_1_TSA) == RXDESC_1_TSA && self.is_last()
+    }
+
     /// Get PTP timestamps if available
     pub(super) fn read_timestamp(&self) -> Option<Timestamp> {
         if self.is_context() && !self.is_owned() {
@@ -253,9 +260,5 @@ impl RxDescriptor {
 
     pub(super) fn timestamp(&self) -> Option<&Timestamp> {
         self.cached_timestamp.as_ref()
-    }
-
-    pub(super) fn has_timestamp(&self) -> bool {
-        (self.inner_raw.read(1) & RXDESC_1_TSA) == RXDESC_1_TSA && self.is_last()
     }
 }
