@@ -177,7 +177,7 @@ impl<'data> TxRing<'data, Running> {
 
         let (descriptor, mut buffer) = self
             .ring
-            .next_entry_and_next_buffer(entry_num)
+            .entry_and_next_buffer(entry_num)
             .ok_or(TxError::NoBufferAvailable)?;
 
         if !descriptor.is_owned() {

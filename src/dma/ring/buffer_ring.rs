@@ -188,3 +188,48 @@ impl<'data> BufferRing<'data> {
         }
     }
 }
+
+#[cfg(all(test, not(target_os = "none")))]
+#[test]
+fn buffer_ring() {
+    use std::collections::VecDeque;
+
+    const BUFFERS: usize = 8;
+
+    let mut buffers = [[0u8; 1524]; BUFFERS];
+
+    let mut buf_ids = VecDeque::new();
+
+    let mut ring = BufferRing::new(&mut buffers);
+
+    assert_eq!(ring.free_buffer_count() as usize, BUFFERS);
+    while let Some(buffer) = ring.next_buffer() {
+        buf_ids.push_front(buffer);
+        assert_eq!(ring.free_buffer_count() as usize, BUFFERS - buf_ids.len());
+    }
+
+    assert_eq!(ring.free_buffer_count(), 0);
+    assert_eq!(buf_ids.len(), BUFFERS);
+
+    assert_eq!(ring.free_buffer_count() as usize, 0);
+    for _ in 0..4 {
+        ring.free(buf_ids.pop_back().unwrap().idx());
+        assert_eq!(ring.free_buffer_count() as usize, BUFFERS - buf_ids.len());
+    }
+
+    assert_eq!(ring.free_buffer_count(), 4);
+    assert_eq!(buf_ids.len(), BUFFERS - 4);
+
+    while let Some(buffer) = ring.next_buffer() {
+        buf_ids.push_front(buffer);
+        assert_eq!(ring.free_buffer_count() as usize, BUFFERS - buf_ids.len());
+    }
+
+    assert!(buf_ids.len() == BUFFERS);
+
+    assert_eq!(ring.free_buffer_count() as usize, 0);
+    while let Some(buffer) = buf_ids.pop_back() {
+        ring.free(buffer.idx());
+        assert_eq!(ring.free_buffer_count() as usize, BUFFERS - buf_ids.len());
+    }
+}

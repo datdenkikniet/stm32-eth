@@ -81,7 +81,7 @@ where
     /// Get the entry at `index` and a now-reserved buffer.
     ///
     /// Returns `None` if no buffers are available.
-    pub fn next_entry_and_next_buffer(&mut self, index: usize) -> Option<(&mut T, Buffer)> {
+    pub fn entry_and_next_buffer(&mut self, index: usize) -> Option<(&mut T, Buffer)> {
         let (after, before_inc) = self.entries.split_at_mut(index);
         let mut entries = before_inc.iter_mut().chain(after.iter_mut());
 
@@ -113,47 +113,56 @@ where
 }
 
 #[cfg(all(test, not(target_os = "none")))]
-use std::collections::VecDeque;
-#[cfg(all(test, not(target_os = "none")))]
 #[test]
-fn buffer_ring() {
-    const BUFFERS: usize = 8;
+fn entry_ring() {
+    use std::vec::Vec;
+    struct Test {
+        done: bool,
+        buffer_idx: Option<BufferIndex>,
+    }
 
-    let mut descriptors = [(); 20];
+    impl DescriptorEntry for Test {
+        fn take_buffer(&mut self) -> Option<BufferIndex> {
+            if self.done {
+                self.buffer_idx.take()
+            } else {
+                None
+            }
+        }
+
+        fn has_buffer(&self) -> bool {
+            self.buffer_idx.is_some()
+        }
+    }
+
+    const BUFFERS: usize = 4;
+
+    let mut descriptors: Vec<_> = (0..20)
+        .map(|_| Test {
+            done: false,
+            buffer_idx: None,
+        })
+        .collect();
+
     let mut buffers = [[0u8; 1524]; BUFFERS];
 
-    let mut buf_ids = VecDeque::new();
+    let mut entry_ring = EntryRing::new(&mut descriptors, &mut buffers);
 
-    let mut ring = BufferRing::new(&mut buffers);
-
-    assert_eq!(ring.free_buffer_count() as usize, BUFFERS);
-    while let Some(buffer) = ring.next_buffer() {
-        buf_ids.push_front(buffer);
-        assert_eq!(ring.free_buffer_count() as usize, BUFFERS - buf_ids.len());
+    for entry in 0..BUFFERS - 1 {
+        let (entry, next_buffer) = entry_ring.entry_and_next_buffer(entry).unwrap();
+        entry.buffer_idx = Some(next_buffer.idx());
     }
 
-    assert_eq!(ring.free_buffer_count(), 0);
-    assert_eq!(buf_ids.len(), BUFFERS);
+    assert!(entry_ring.entry_and_next_buffer(0).is_some());
 
-    assert_eq!(ring.free_buffer_count() as usize, 0);
-    for _ in 0..4 {
-        ring.free(buf_ids.pop_back().unwrap().idx());
-        assert_eq!(ring.free_buffer_count() as usize, BUFFERS - buf_ids.len());
+    // "Asynchronously" make the buffers finish
+    for entry in 0..BUFFERS / 2 {
+        entry_ring.entries[entry].done = true;
     }
 
-    assert_eq!(ring.free_buffer_count(), 4);
-    assert_eq!(buf_ids.len(), BUFFERS - 4);
-
-    while let Some(buffer) = ring.next_buffer() {
-        buf_ids.push_front(buffer);
-        assert_eq!(ring.free_buffer_count() as usize, BUFFERS - buf_ids.len());
+    for entry in [BUFFERS - 1, 0] {
+        assert!(entry_ring.entry_and_next_buffer(entry).is_some());
     }
 
-    assert!(buf_ids.len() == BUFFERS);
-
-    assert_eq!(ring.free_buffer_count() as usize, 0);
-    while let Some(buffer) = buf_ids.pop_back() {
-        ring.free(buffer.idx());
-        assert_eq!(ring.free_buffer_count() as usize, BUFFERS - buf_ids.len());
-    }
+    assert!(entry_ring.entry_and_next_buffer(1).is_none());
 }
