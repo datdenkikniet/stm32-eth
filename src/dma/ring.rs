@@ -104,13 +104,33 @@ pub(crate) struct BufferRing<'data> {
 }
 
 impl<'data> BufferRing<'data> {
+    fn new(buffers: &'data mut [[u8; MTU + 2]]) -> Self {
+        assert!(
+            buffers.len() < u16::MAX as usize,
+            "A maxiumum of {} buffers are supported.",
+            u16::MAX - 1
+        );
+        Self {
+            buffers,
+            first_free: BufferIndex(
+                // SAFETY: 0 != u16::MAX
+                unsafe { NonMaxU16::new_unchecked(0) },
+            ),
+            last_used: BufferIndex(
+                // SAFETY: 0 != u16::MAX
+                unsafe { NonMaxU16::new_unchecked(0) },
+            ),
+            all_buffers_used: false,
+        }
+    }
+
     fn buffer_count(&self) -> NonMaxU16 {
         // SAFETY: it is not possible create a [`BufferRing`] with
         // u16::MAX buffers
         unsafe { NonMaxU16::new_unchecked(self.buffers.len() as u16) }
     }
 
-    fn free_buffers(&self) -> u16 {
+    fn free_buffer_count(&self) -> u16 {
         let last_used = self.first_free.0.get();
         let first_free = self.last_used.0.get();
 
@@ -130,20 +150,11 @@ impl<'data> BufferRing<'data> {
     }
 
     fn next_buffer(&mut self) -> Option<Buffer> {
-        let first_free = self.first_free.0.get();
-        let last_used = self.last_used.0.get();
-
-        let buf_count = self.buffer_count().get();
-        // The amount of used buffers.
-        //
-        // This value will be 0 if all buffers are used, so
-        // you must not check `used_buffers` without also using
-        // `last_buffer`.
-        let used_buffers = first_free.wrapping_sub(last_used) % (buf_count + 1);
-
         let last_buffer = self.first_free.incd(self.buffer_count()) == self.last_used;
 
-        if used_buffers != buf_count && !self.all_buffers_used {
+        let free_buffers = self.free_buffer_count();
+
+        if free_buffers > 0 && !self.all_buffers_used {
             // We've now assigned the last buffer, there are none left to be
             // assigned until one is freed.
             if last_buffer {
@@ -195,62 +206,38 @@ pub struct EntryRing<'data, T> {
 
 impl<'data, T> EntryRing<'data, T> {
     pub fn new(descriptors: &'data mut [T], buffers: &'data mut [[u8; MTU + 2]]) -> Self {
-        let buffers_len = buffers.len();
-
-        assert!(
-            buffers_len < u16::MAX as usize,
-            "A maxiumum of {} buffers are supported.",
-            u16::MAX - 1
-        );
-
         Self {
             entries: descriptors,
-            buffers: BufferRing {
-                buffers,
-                first_free: BufferIndex(
-                    // SAFETY: 0 != u16::MAX
-                    unsafe { NonMaxU16::new_unchecked(0) },
-                ),
-                last_used: BufferIndex(
-                    // SAFETY: 0 != u16::MAX
-                    unsafe { NonMaxU16::new_unchecked(0) },
-                ),
-                all_buffers_used: false,
-            },
+            buffers: BufferRing::new(buffers),
         }
     }
 
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.entries.len()
     }
 
-    pub fn buffer_count(&self) -> NonMaxU16 {
+    pub(crate) fn buffer_count(&self) -> NonMaxU16 {
         self.buffers.buffer_count()
     }
 
-    pub fn entry_count(&self) -> u16 {
+    pub(crate) fn entry_count(&self) -> u16 {
         self.entries.len() as u16
     }
 
     /// Get the [`T`] at index `index`
-    pub fn entry(&self, index: usize) -> &T {
+    pub(crate) fn entry(&self, index: usize) -> &T {
         &self.entries[index]
     }
 
-    /// Get the [`T`] at index `index`
-    pub fn entry_mut(&mut self, index: usize) -> &mut T {
-        &mut self.entries[index]
-    }
-
-    pub fn entries_mut(&mut self) -> impl Iterator<Item = &mut T> {
+    pub(crate) fn entries_mut(&mut self) -> impl Iterator<Item = &mut T> {
         self.entries.iter_mut()
     }
 
-    pub fn entries(&self) -> impl Iterator<Item = &T> {
+    pub(crate) fn entries(&self) -> impl Iterator<Item = &T> {
         self.entries.iter()
     }
 
-    pub fn buffers_and_entries<F>(&mut self, mut f: F)
+    pub(crate) fn buffers_and_entries<F>(&mut self, mut f: F)
     where
         F: FnMut(&mut T, Option<Buffer>),
     {
@@ -262,35 +249,12 @@ impl<'data, T> EntryRing<'data, T> {
         });
     }
 
-    pub fn last_entry_mut(&mut self) -> &mut T {
+    pub(crate) fn last_entry_mut(&mut self) -> &mut T {
         &mut self.entries[self.entries.len() - 1]
     }
 
-    pub fn last_entry(&self) -> &T {
-        &self.entries[self.entries.len() - 1]
-    }
-
-    pub fn entries_start_address(&self) -> *const T {
+    pub(crate) fn entries_start_address(&self) -> *const T {
         self.entries.as_ptr()
-    }
-
-    /// Get the amount of buffers available for assignment.
-    pub fn free_buffers(&self) -> u16 {
-        self.buffers.free_buffers()
-    }
-
-    /// Get the next available buffer.
-    ///
-    /// Once the buffer has been used, it must be free-d using
-    /// [`DescriptorRing::free()`], in the same order as the [`BufferIndex`]
-    /// values were acquired.
-    pub fn next_buffer(&mut self) -> Option<Buffer> {
-        self.buffers.next_buffer()
-    }
-
-    /// Free the buffer at the specified index.
-    pub fn free(&mut self, index: BufferIndex) {
-        self.buffers.free(index)
     }
 }
 
@@ -335,7 +299,8 @@ where
 #[cfg(all(test, not(target_os = "none")))]
 use std::collections::VecDeque;
 #[cfg(all(test, not(target_os = "none")))]
-fn buffer_movements() {
+#[test]
+fn buffer_ring() {
     const BUFFERS: usize = 8;
 
     let mut descriptors = [(); 20];
@@ -343,36 +308,36 @@ fn buffer_movements() {
 
     let mut buf_ids = VecDeque::new();
 
-    let mut ring = EntryRing::new(&mut descriptors, &mut buffers);
+    let mut ring = BufferRing::new(&mut buffers);
 
-    assert_eq!(ring.free_buffers() as usize, BUFFERS);
-    while let Some((idx, _)) = ring.next_buffer() {
-        buf_ids.push_front(idx);
-        assert_eq!(ring.free_buffers() as usize, BUFFERS - buf_ids.len());
+    assert_eq!(ring.free_buffer_count() as usize, BUFFERS);
+    while let Some(buffer) = ring.next_buffer() {
+        buf_ids.push_front(buffer);
+        assert_eq!(ring.free_buffer_count() as usize, BUFFERS - buf_ids.len());
     }
 
-    assert_eq!(ring.free_buffers(), 0);
+    assert_eq!(ring.free_buffer_count(), 0);
     assert_eq!(buf_ids.len(), BUFFERS);
 
-    assert_eq!(ring.free_buffers() as usize, 0);
+    assert_eq!(ring.free_buffer_count() as usize, 0);
     for _ in 0..4 {
-        ring.free(buf_ids.pop_back().unwrap());
-        assert_eq!(ring.free_buffers() as usize, BUFFERS - buf_ids.len());
+        ring.free(buf_ids.pop_back().unwrap().idx());
+        assert_eq!(ring.free_buffer_count() as usize, BUFFERS - buf_ids.len());
     }
 
-    assert_eq!(ring.free_buffers(), 4);
+    assert_eq!(ring.free_buffer_count(), 4);
     assert_eq!(buf_ids.len(), BUFFERS - 4);
 
-    while let Some((idx, _)) = ring.next_buffer() {
-        buf_ids.push_front(idx);
-        assert_eq!(ring.free_buffers() as usize, BUFFERS - buf_ids.len());
+    while let Some(buffer) = ring.next_buffer() {
+        buf_ids.push_front(buffer);
+        assert_eq!(ring.free_buffer_count() as usize, BUFFERS - buf_ids.len());
     }
 
     assert!(buf_ids.len() == BUFFERS);
 
-    assert_eq!(ring.free_buffers() as usize, 0);
-    while let Some(idx) = buf_ids.pop_back() {
-        ring.free(idx);
-        assert_eq!(ring.free_buffers() as usize, BUFFERS - buf_ids.len());
+    assert_eq!(ring.free_buffer_count() as usize, 0);
+    while let Some(buffer) = buf_ids.pop_back() {
+        ring.free(buffer.idx());
+        assert_eq!(ring.free_buffer_count() as usize, BUFFERS - buf_ids.len());
     }
 }
