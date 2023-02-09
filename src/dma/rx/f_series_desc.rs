@@ -78,8 +78,10 @@ impl RxDescriptor {
         }
     }
 
-    pub(super) fn setup(&mut self, buffer: Buffer) {
-        self.set_owned(buffer);
+    pub(super) fn setup(&mut self, buffer: Option<Buffer>) {
+        if let Some(buffer) = buffer {
+            self.set_owned(buffer);
+        }
     }
 
     /// Is owned by the DMA engine?
@@ -124,7 +126,7 @@ impl RxDescriptor {
 
     /// Configure the buffer and its length.
     fn set_buffer(&mut self, buffer: Buffer) {
-        let buffer_ptr = buffer.as_ptr();
+        let buffer_ptr = buffer.ptr();
         let buffer_len = buffer.len();
 
         unsafe {

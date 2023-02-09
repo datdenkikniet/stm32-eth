@@ -1,7 +1,7 @@
 use core::marker::PhantomData;
 
 use super::{
-    ring::{Buffer, EntryRing},
+    ring::{Buffer, EntryRing, SettableDescriptorEntry},
     PacketId,
 };
 use crate::peripherals::ETHERNET_DMA;
@@ -20,6 +20,12 @@ mod h_desc;
 use h_desc as descriptor;
 
 pub use descriptor::RxDescriptor;
+
+impl SettableDescriptorEntry for RxDescriptor {
+    fn set_buffer(&mut self, buffer: Buffer) {
+        self.set_owned(buffer);
+    }
+}
 
 /// Errors that can occur during RX
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -91,16 +97,10 @@ impl<'data> RxRing<'data, NotRunning> {
     /// Start the RX ring
     pub fn start(mut self, eth_dma: &ETHERNET_DMA) -> RxRing<'data, Running> {
         // Setup ring
-        // FIXME: do setup, asert that ring buffer length >= descriptors
-
-        let rx_buffers = self.ring.buffer_count().get();
-        let rx_descriptors = self.ring.entry_count();
-
-        assert!(rx_buffers >= rx_descriptors);
-
         self.ring.buffers_and_entries(|entry, buffer| {
-            // NOTE(unwrap): buffer_count >= entry_count, so buffers will be available.
-            let buffer = buffer.unwrap();
+            if let Some(buffer) = &buffer {
+                defmt::trace!("Setting up buffer {}", buffer.idx());
+            }
             entry.setup(buffer);
         });
 
@@ -123,14 +123,11 @@ impl<'data> RxRing<'data, NotRunning> {
         {
             // TODO: assert that ethernet DMA can access
             // the memory in these rings
-            assert!(self.ring.descriptors().count() >= 4);
+            assert!(self.ring.entry_count() >= 4);
 
             // Assert that the descriptors are properly aligned.
-            assert!(ring_ptr as u32 & !0b11 == ring_ptr as u32);
-            assert!(
-                self.ring.last_descriptor_mut() as *const _ as u32 & !0b11
-                    == self.ring.last_descriptor_mut() as *const _ as u32
-            );
+            assert!(ring_ptr as u32 % 4 == 0);
+            assert!(self.ring.last_entry_mut() as *const _ as u32 % 4 == 0);
 
             // Set the start pointer.
             eth_dma
@@ -138,18 +135,17 @@ impl<'data> RxRing<'data, NotRunning> {
                 .write(|w| unsafe { w.bits(ring_ptr as u32) });
 
             // Set the Receive Descriptor Ring Length
-            eth_dma.dmacrx_rlr.write(|w| {
-                w.rdrl()
-                    .variant((self.ring.descriptors().count() - 1) as u16)
-            });
+            eth_dma
+                .dmacrx_rlr
+                .write(|w| w.rdrl().variant((self.ring.entry_count() - 1) as u16));
 
             // Set the tail pointer
             eth_dma
                 .dmacrx_dtpr
-                .write(|w| unsafe { w.bits(self.ring.last_descriptor() as *const _ as u32) });
+                .write(|w| unsafe { w.bits(self.ring.last_entry_mut() as *const _ as u32) });
 
             // Set receive buffer size
-            let receive_buffer_size = self.ring.last_buffer().len() as u16;
+            let receive_buffer_size = self.ring.buffer_size() as u16;
             assert!(receive_buffer_size % 4 == 0);
 
             eth_dma.dmacrx_cr.modify(|_, w| unsafe {
@@ -163,6 +159,9 @@ impl<'data> RxRing<'data, NotRunning> {
                     // AUtomatically flush on bus error
                     .rpf()
                     .set_bit()
+                    // RX DMA programmable burst length.
+                    .rxpbl()
+                    .variant(32)
             });
         }
 
@@ -218,10 +217,10 @@ impl<'data> RxRing<'data, Running> {
 
     /// Receive the next packet (if any is ready), or return `None`
     /// immediately.
-    pub fn recv_next(
-        &mut self,
+    pub fn recv_next<'a>(
+        &'a mut self,
         #[allow(unused_variables)] packet_id: Option<PacketId>,
-    ) -> Result<RxPacket, RxError> {
+    ) -> Result<RxPacket<'a, 'data>, RxError> {
         if !self.running_state().is_running() {
             self.demand_poll();
         }
@@ -243,11 +242,10 @@ impl<'data> RxRing<'data, Running> {
                 let desc_has_timestamp = descriptor.has_timestamp();
 
                 drop(descriptor);
-                drop(buffer);
 
                 // On H7's, the timestamp is stored in the next Context
                 // descriptor.
-                let (ctx_descriptor, ctx_des_buffer) = self.ring.get(self.next_entry);
+                let ctx_descriptor = self.ring.entry(self.next_entry);
 
                 let timestamp = if desc_has_timestamp {
                     if let Some(timestamp) = ctx_descriptor.read_timestamp() {
@@ -259,34 +257,32 @@ impl<'data> RxRing<'data, Running> {
                     None
                 };
 
-                if !ctx_descriptor.is_owned() {
-                    // Advance over this buffer
-                    self.next_entry = (self.next_entry + 1) % entries_len;
-                    ctx_descriptor.set_owned(&ctx_des_buffer);
+                if let Some((ctx_descriptor, ctx_des_buffer)) =
+                    self.ring.entry_and_next_buffer(self.next_entry)
+                {
+                    if !ctx_descriptor.is_owned() {
+                        // Advance over this buffer
+                        self.next_entry = (self.next_entry + 1) % entries_len;
+                        ctx_descriptor.set_owned(ctx_des_buffer);
+                    }
                 }
 
-                let (descriptor, buffer) = self.ring.get(entry);
+                let descriptor = self.ring.entry_mut(entry);
 
                 descriptor.attach_timestamp(timestamp);
 
                 (timestamp, descriptor, buffer)
             } else {
-                let (descriptor, buffer) = self.ring.get(entry);
+                let descriptor = self.ring.entry_mut(entry);
                 descriptor.attach_timestamp(None);
                 (None, descriptor, buffer)
             }
         };
 
-        res.map(move |_| {
-            #[cfg(all(feature = "ptp", feature = "f-series"))]
-            let timestamp = descriptor.read_timestamp();
-
-            RxPacket {
-                entry: descriptor,
-                buffer,
-                #[cfg(feature = "ptp")]
-                timestamp,
-            }
+        res.map(move |_| RxPacket {
+            entry,
+            buffer,
+            ring: self,
         })
     }
 
@@ -330,44 +326,48 @@ impl RunningState {
 ///
 /// This packet implements [Deref<\[u8\]>](core::ops::Deref) and should be used
 /// as a slice.
-pub struct RxPacket<'a> {
-    entry: &'a mut RxDescriptor,
+pub struct RxPacket<'a, 'ring> {
+    entry: usize,
     buffer: Buffer,
-    #[cfg(feature = "ptp")]
-    timestamp: Option<Timestamp>,
+    ring: &'a mut RxRing<'ring, Running>,
 }
 
-impl core::ops::Deref for RxPacket<'_> {
-    type Target = [u8];
-
-    fn deref(&self) -> &Self::Target {
-        &self.buffer[0..self.entry.frame_length()]
-    }
-}
-
-impl core::ops::DerefMut for RxPacket<'_> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.buffer[0..self.entry.frame_length()]
-    }
-}
-
-impl Drop for RxPacket<'_> {
-    fn drop(&mut self) {
-        // SAFETY: we drop `self`, and with it the Buffer contained
-        // within.
-        self.entry.set_owned(unsafe { self.buffer.clone() });
-    }
-}
-
-impl RxPacket<'_> {
+impl RxPacket<'_, '_> {
     /// Pass the received packet back to the DMA engine.
     pub fn free(self) {
         drop(self)
+    }
+
+    fn frame_length(&self) -> usize {
+        self.ring.ring.entry(self.entry).frame_length()
     }
 
     /// Get the timestamp associated with this packet
     #[cfg(feature = "ptp")]
     pub fn timestamp(&self) -> Option<Timestamp> {
         self.timestamp
+    }
+}
+
+impl core::ops::Deref for RxPacket<'_, '_> {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.buffer[0..self.frame_length()]
+    }
+}
+
+impl core::ops::DerefMut for RxPacket<'_, '_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        let frame_len = self.frame_length();
+        &mut self.buffer[0..frame_len]
+    }
+}
+
+impl Drop for RxPacket<'_, '_> {
+    fn drop(&mut self) {
+        self.ring.ring.free(self.buffer.idx());
+        self.ring.ring.attach_free_buffers(self.entry + 1);
+        self.ring.demand_poll();
     }
 }

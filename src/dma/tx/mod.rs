@@ -25,6 +25,7 @@ pub struct Running;
 pub type TxDescriptorRing<'rx> = EntryRing<'rx, TxDescriptor>;
 
 /// Errors that can occur during Ethernet TX
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[derive(Debug, PartialEq)]
 pub enum TxError {
     /// Ring buffer is full
@@ -119,11 +120,11 @@ impl<'data> TxRing<'data, NotRunning> {
         {
             // TODO: assert that ethernet DMA can access
             // the memory in these rings
-            assert!(self.ring.descriptors().count() >= 4);
+            assert!(self.ring.entries().count() >= 4);
 
             // Assert that the descriptors are properly aligned.
-            assert!(ring_ptr as u32 & !0b11 == ring_ptr as u32);
-            assert!(self.ring.last_descriptor() as *const _ as u32 % 4 == 0);
+            assert!(ring_ptr as u32 % 4 == 0);
+            assert!(self.ring.last_entry_mut() as *const _ as u32 % 4 == 0);
 
             // Set the start pointer.
             eth_dma
@@ -131,15 +132,14 @@ impl<'data> TxRing<'data, NotRunning> {
                 .write(|w| unsafe { w.bits(ring_ptr as u32) });
 
             // Set the Transmit Descriptor Ring Length
-            eth_dma.dmactx_rlr.write(|w| {
-                w.tdrl()
-                    .variant((self.ring.descriptors().count() - 1) as u16)
-            });
+            eth_dma
+                .dmactx_rlr
+                .write(|w| w.tdrl().variant((self.ring.entries().count() - 1) as u16));
 
             // Set the tail pointer
             eth_dma
                 .dmactx_dtpr
-                .write(|w| unsafe { w.bits(self.ring.last_descriptor_mut() as *const _ as u32) });
+                .write(|w| unsafe { w.bits(self.ring.last_entry_mut() as *const _ as u32) });
         }
 
         // "Preceding reads and writes cannot be moved past subsequent writes."
@@ -202,9 +202,8 @@ impl<'data> TxRing<'data, Running> {
     /// If this function returns `true`, the next [`TxRing::send`] is
     /// guaranteed to succeed.
     pub fn available(&mut self) -> bool {
-        // let (desc, _) = self.ring.get_pair(self.next_entry);
-        // !desc.is_owned()
-        todo!()
+        let entry = self.ring.entry(self.next_entry);
+        !entry.is_owned() && self.ring.free_buffers() > 0
     }
 
     /// Demand that the DMA engine polls the current `TxDescriptor`
@@ -214,7 +213,7 @@ impl<'data> TxRing<'data, Running> {
         //
         // On F7, we only perform an atomic write to `damrpdr`.
         //
-        // On H7, we only perform a Read-Write to `dmacrx_dtpr`,
+        // On H7, we only perform a Read-Write to `dmactx_dtpr`,
         // always with the same value. Running `demand_poll` concurrently
         // with the other location in which this register is written ([`TxRing::start`])
         // is impossible, which is guaranteed the state transition from NotRunning to

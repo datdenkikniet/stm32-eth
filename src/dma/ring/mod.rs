@@ -15,6 +15,11 @@ pub trait DescriptorEntry {
     fn has_buffer(&self) -> bool;
 }
 
+pub trait SettableDescriptorEntry: DescriptorEntry {
+    /// Set the buffer of this entry to `buffer`.
+    fn set_buffer(&mut self, buffer: Buffer);
+}
+
 pub struct EntryRing<'data, T> {
     entries: &'data mut [T],
     buffers: BufferRing<'data>,
@@ -45,6 +50,10 @@ impl<'data, T> EntryRing<'data, T> {
         &self.entries[index]
     }
 
+    pub(crate) fn entry_mut(&mut self, index: usize) -> &mut T {
+        &mut self.entries[index]
+    }
+
     pub(crate) fn entries_mut(&mut self) -> impl Iterator<Item = &mut T> {
         self.entries.iter_mut()
     }
@@ -71,6 +80,22 @@ impl<'data, T> EntryRing<'data, T> {
 
     pub(crate) fn entries_start_address(&self) -> *const T {
         self.entries.as_ptr()
+    }
+
+    pub(crate) fn buffer_size(&self) -> usize {
+        self.buffers.buffer_len()
+    }
+
+    pub(crate) fn next_buffer(&mut self) -> Option<Buffer> {
+        self.buffers.next_buffer()
+    }
+
+    pub(crate) fn free(&mut self, index: BufferIndex) {
+        self.buffers.free(index);
+    }
+
+    pub(crate) fn free_buffers(&self) -> u16 {
+        self.buffers.free_buffer_count()
     }
 }
 
@@ -100,7 +125,8 @@ where
     }
 
     /// Get the entry at `index`, and the buffer currently associated
-    /// with that entry. The buffer must be freed or it can be used again.
+    /// with that entry. The buffer must be freed once you are done using
+    /// it.
     pub fn entry_buffer(&mut self, index: usize) -> Option<(&mut T, Buffer)> {
         let entry = &mut self.entries[index];
 
@@ -109,6 +135,26 @@ where
         let buffer = unsafe { self.buffers.get_buffer(idx) };
 
         Some((entry, buffer))
+    }
+}
+
+impl<'data, T> EntryRing<'data, T>
+where
+    T: SettableDescriptorEntry,
+{
+    pub fn attach_free_buffers(&mut self, start_index: usize) {
+        let (after, before_inc) = self.entries.split_at_mut(start_index);
+        let mut entries = before_inc.iter_mut().chain(after.iter_mut());
+
+        while let Some(entry) = entries.next() {
+            if !entry.has_buffer() {
+                if let Some(next_buffer) = self.buffers.next_buffer() {
+                    entry.set_buffer(next_buffer);
+                } else {
+                    break;
+                }
+            }
+        }
     }
 }
 

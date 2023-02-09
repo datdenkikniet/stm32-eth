@@ -1,6 +1,10 @@
 use core::sync::atomic::{self, Ordering};
 
-use crate::dma::{raw_descriptor::RawDescriptor, PacketId, RxError};
+use crate::dma::{
+    raw_descriptor::RawDescriptor,
+    ring::{Buffer, BufferIndex, DescriptorEntry},
+    PacketId, RxError,
+};
 
 #[cfg(feature = "ptp")]
 use crate::ptp::Timestamp;
@@ -84,6 +88,7 @@ pub use consts::*;
 pub struct RxDescriptor {
     inner_raw: RawDescriptor,
     packet_id: Option<PacketId>,
+    buffer_index: Option<BufferIndex>,
     #[cfg(feature = "ptp")]
     cached_timestamp: Option<Timestamp>,
 }
@@ -94,14 +99,44 @@ impl Default for RxDescriptor {
     }
 }
 
+impl DescriptorEntry for RxDescriptor {
+    fn take_buffer(&mut self) -> Option<BufferIndex> {
+        if !self.is_owned() {
+            self.buffer_index.take()
+        } else {
+            None
+        }
+    }
+
+    fn has_buffer(&self) -> bool {
+        self.buffer_index.is_some()
+    }
+}
+
 impl RxDescriptor {
     /// Creates a new [`RxDescriptor`].
     pub const fn new() -> Self {
         Self {
             inner_raw: RawDescriptor::new(),
             packet_id: None,
+            buffer_index: None,
             #[cfg(feature = "ptp")]
             cached_timestamp: None,
+        }
+    }
+
+    pub(super) fn setup(&mut self, buffer: Option<Buffer>) {
+        self.packet_id = None;
+        self.buffer_index = None;
+        #[cfg(feature = "ptp")]
+        {
+            self.timestamp = None;
+        }
+
+        if let Some(buffer) = buffer {
+            self.set_owned(buffer);
+        } else {
+            self.buffer_index = None
         }
     }
 
@@ -126,10 +161,6 @@ impl RxDescriptor {
         self.inner_raw.read(3) & RXDESC_3_CTXT == RXDESC_3_CTXT
     }
 
-    pub(super) fn has_timestamp(&self) -> bool {
-        (self.inner_raw.read(1) & RXDESC_1_TSA) == RXDESC_1_TSA && self.is_last()
-    }
-
     pub(super) fn frame_length(&self) -> usize {
         if self.is_owned() {
             0
@@ -143,13 +174,8 @@ impl RxDescriptor {
         self.packet_id.as_ref()
     }
 
-    pub(super) fn setup(&mut self, buffer: &[u8]) {
-        self.set_owned(buffer);
-    }
-
     /// Pass ownership to the DMA engine
-    pub(super) fn set_owned(&mut self, buffer: &[u8]) {
-        let buffer = buffer.as_ptr();
+    pub(super) fn set_owned(&mut self, buffer: Buffer) {
         self.set_buffer(buffer);
 
         // "Preceding reads and writes cannot be moved past subsequent writes."
@@ -169,10 +195,10 @@ impl RxDescriptor {
     }
 
     /// Configure the buffer and its length.
-    fn set_buffer(&mut self, buffer_ptr: *const u8) {
+    fn set_buffer(&mut self, buffer: Buffer) {
         unsafe {
             // Set buffer 1 address.
-            self.inner_raw.modify(0, |_| buffer_ptr as u32);
+            self.inner_raw.modify(0, |_| buffer.ptr() as u32);
 
             // RXDESC does not contain buffer length, it is set
             // in register INSERT_HERE instead. The size of all
@@ -185,14 +211,12 @@ impl RxDescriptor {
                 let w = w | RXDESC_3_BUF1V;
                 w
             });
+
+            self.buffer_index = Some(buffer.idx());
         }
     }
 
-    pub(super) fn take_received(
-        &mut self,
-        packet_id: Option<PacketId>,
-        buffer: &mut [u8],
-    ) -> Result<(), RxError> {
+    pub(super) fn take_received(&mut self, packet_id: Option<PacketId>) -> Result<(), RxError> {
         if self.is_owned() {
             Err(RxError::WouldBlock)
         } else
@@ -206,7 +230,6 @@ impl RxDescriptor {
 
             Ok(())
         } else {
-            self.set_owned(buffer);
             Err(RxError::Truncated)
         }
     }
@@ -230,5 +253,9 @@ impl RxDescriptor {
 
     pub(super) fn timestamp(&self) -> Option<&Timestamp> {
         self.cached_timestamp.as_ref()
+    }
+
+    pub(super) fn has_timestamp(&self) -> bool {
+        (self.inner_raw.read(1) & RXDESC_1_TSA) == RXDESC_1_TSA && self.is_last()
     }
 }

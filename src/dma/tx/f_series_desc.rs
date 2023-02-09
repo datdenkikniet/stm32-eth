@@ -149,7 +149,7 @@ impl TxDescriptor {
     /// setting it to `buffer`.
     fn set_buffer(&mut self, buffer: Buffer, data_len: usize) {
         unsafe {
-            let ptr = buffer.as_ptr();
+            let ptr = buffer.ptr();
 
             // Set buffer pointer 2 to the provided buffer.
             self.inner_raw.write(3, ptr as u32);

@@ -196,16 +196,6 @@ impl<'rx, 'tx> EthernetDMA<'rx, 'tx> {
 
             eth_dma.dmasbmr.modify(|_, w| w.aal().set_bit());
 
-            eth_dma.dmacrx_cr.modify(|_, w| {
-                w
-                    // RX DMA programmable burst length.
-                    .rxpbl()
-                    .variant(32)
-                    // Receive buffer size
-                    .rbsz()
-                    .variant(rx_buffer.first_buffer().len() as u16)
-            });
-
             eth_dma.dmactx_cr.modify(|_, w| {
                 w
                     // TX DMA programmable burst length.
@@ -303,7 +293,10 @@ impl<'rx, 'tx> EthernetDMA<'rx, 'tx> {
 
     /// Receive the next packet (if any is ready), or return `None`
     /// immediately.
-    pub fn recv_next(&mut self, packet_id: Option<PacketId>) -> Result<RxPacket, RxError> {
+    pub fn recv_next<'a>(
+        &'a mut self,
+        packet_id: Option<PacketId>,
+    ) -> Result<RxPacket<'a, 'rx>, RxError> {
         self.rx_ring.recv_next(packet_id.map(|p| p.into()))
     }
 

@@ -99,6 +99,15 @@ fn main() -> ! {
                 buf[38..42].copy_from_slice(&TARGET_IP);
             });
 
+            match r {
+                Ok(()) => {
+                    defmt::info!("ARP sent");
+                }
+                Err(e) => {
+                    defmt::info!("ARP failed. {}, {}", e, dma.tx_state())
+                }
+            }
+
             loop {
                 use core::hash::{Hash, Hasher};
 
@@ -112,15 +121,6 @@ fn main() -> ! {
                         hasher.finish()
                     );
                     break;
-                }
-            }
-
-            match r {
-                Ok(()) => {
-                    defmt::info!("ARP sent");
-                }
-                Err(_) => {
-                    defmt::info!("ARP failed. {}", dma.tx_state())
                 }
             }
         } else {

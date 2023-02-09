@@ -65,6 +65,10 @@ impl Buffer {
             buffer_idx: self.buffer_idx,
         }
     }
+
+    pub fn ptr(&self) -> *const u8 {
+        self.ptr as _
+    }
 }
 
 impl core::ops::Deref for Buffer {
@@ -114,13 +118,17 @@ impl<'data> BufferRing<'data> {
         }
     }
 
+    pub fn buffer_len(&self) -> usize {
+        MTU + 2
+    }
+
     pub fn buffer_count(&self) -> NonMaxU16 {
         // SAFETY: it is not possible create a [`BufferRing`] with
         // u16::MAX buffers
         unsafe { NonMaxU16::new_unchecked(self.buffers.len() as u16) }
     }
 
-    fn free_buffer_count(&self) -> u16 {
+    pub fn free_buffer_count(&self) -> u16 {
         let last_used = self.first_free.0.get();
         let first_free = self.last_used.0.get();
 
@@ -155,13 +163,15 @@ impl<'data> BufferRing<'data> {
 
             self.first_free.inc(self.buffer_count());
 
-            let buffer = self.buffers[current_idx.0.get() as usize];
+            let buffer = &self.buffers[current_idx.0.get() as usize];
 
             let buffer = Buffer {
                 ptr: buffer.as_ptr() as *mut _,
                 len: buffer.len(),
                 buffer_idx: current_idx,
             };
+
+            defmt::trace!("Allocated {}", current_idx);
 
             Some(buffer)
         } else {
@@ -170,7 +180,10 @@ impl<'data> BufferRing<'data> {
     }
 
     pub fn free(&mut self, index: BufferIndex) {
-        assert_eq!(index, self.last_used, "Non-contiguous free of buffer.");
+        assert_eq!(
+            index, self.last_used,
+            "Tried to free a buffer non-contiguously."
+        );
         self.all_buffers_used = false;
         self.last_used.inc(self.buffer_count());
     }

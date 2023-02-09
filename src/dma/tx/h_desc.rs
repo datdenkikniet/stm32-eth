@@ -1,6 +1,10 @@
 use core::sync::atomic::{self, Ordering};
 
-use crate::dma::{raw_descriptor::RawDescriptor, PacketId};
+use crate::dma::{
+    raw_descriptor::RawDescriptor,
+    ring::{Buffer, BufferIndex, DescriptorEntry},
+    PacketId,
+};
 
 #[cfg(feature = "ptp")]
 use crate::ptp::Timestamp;
@@ -123,6 +127,7 @@ pub use consts::*;
 pub struct TxDescriptor {
     inner_raw: RawDescriptor,
     packet_id: Option<PacketId>,
+    buffer_idx: Option<BufferIndex>,
     #[cfg(feature = "ptp")]
     cached_timestamp: Option<Timestamp>,
 }
@@ -133,12 +138,27 @@ impl Default for TxDescriptor {
     }
 }
 
+impl DescriptorEntry for TxDescriptor {
+    fn take_buffer(&mut self) -> Option<BufferIndex> {
+        if !self.is_owned() {
+            self.buffer_idx.take()
+        } else {
+            None
+        }
+    }
+
+    fn has_buffer(&self) -> bool {
+        self.buffer_idx.is_some()
+    }
+}
+
 impl TxDescriptor {
     /// Creates an zeroed TxDescriptor.
     pub const fn new() -> Self {
         Self {
             inner_raw: RawDescriptor::new(),
             packet_id: None,
+            buffer_idx: None,
             #[cfg(feature = "ptp")]
             cached_timestamp: None,
         }
@@ -153,6 +173,12 @@ impl TxDescriptor {
     pub(super) fn setup(&mut self) {
         // Zero-out all fields in the descriptor
         (0..4).for_each(|n| unsafe { self.inner_raw.write(n, 0) });
+        self.buffer_idx = None;
+        self.packet_id = None;
+        #[cfg(feature = "ptp")]
+        {
+            self.cached_timestamp = None;
+        }
     }
 
     pub(super) fn is_owned(&self) -> bool {
@@ -170,9 +196,7 @@ impl TxDescriptor {
     }
 
     /// Pass ownership to the DMA engine
-    pub(super) fn send(&mut self, packet_id: Option<PacketId>, buffer: &[u8]) {
-        self.set_buffer(buffer);
-
+    pub(super) fn send(&mut self, packet_id: Option<PacketId>, buffer: Buffer, payload_len: usize) {
         if packet_id.is_some() && cfg!(feature = "ptp") {
             unsafe {
                 self.inner_raw.modify(2, |w| w | TXDESC_2_TTSE);
@@ -180,6 +204,7 @@ impl TxDescriptor {
         }
 
         self.packet_id = packet_id;
+        self.set_buffer(buffer, payload_len);
 
         // "Preceding reads and writes cannot be moved past subsequent writes."
         atomic::fence(Ordering::Release);
@@ -188,14 +213,12 @@ impl TxDescriptor {
         unsafe {
             self.inner_raw.modify(2, |w| w | TXDESC_2_IOC);
 
-            let tx_len = ((buffer.len() as u32) << TXDESC_3_FL_SHIFT) & TXDESC_3_FL_MASK;
-
             self.inner_raw.modify(3, |w| {
                 w | TXDESC_3_OWN
                     | TXDESC_3_CIC::IpHeaderAndPayloadAndPseudoHeader as u32
                     | TXDESC_3_FD
                     | TXDESC_3_LD
-                    | tx_len
+                    | ((payload_len as u32) << TXDESC_3_FL_SHIFT) & TXDESC_3_FL_MASK
             })
         };
 
@@ -207,12 +230,10 @@ impl TxDescriptor {
 
     /// Configure the buffer to use for transmitting,
     /// setting it to `buffer`.
-    fn set_buffer(&mut self, buffer: &[u8]) {
+    fn set_buffer(&mut self, buffer: Buffer, payload_len: usize) {
         unsafe {
-            let ptr = buffer.as_ptr();
-
             // Set buffer pointer 1 to the provided buffer.
-            self.inner_raw.write(0, ptr as u32);
+            self.inner_raw.write(0, buffer.ptr() as u32);
 
             self.inner_raw.modify(2, |w| {
                 // Clear out B1L
@@ -220,8 +241,10 @@ impl TxDescriptor {
                 // Clear out B2L
                 let w = w & !TXDESC_2_B2L_MASK;
                 // Set B1L
-                w | ((buffer.len() as u32) << TXDESC_2_HEAD_B1L_SHIFT) & TXDESC_2_HEAD_B1L_MASK
+                w | ((payload_len as u32) << TXDESC_2_HEAD_B1L_SHIFT) & TXDESC_2_HEAD_B1L_MASK
             });
+
+            self.buffer_idx = Some(buffer.idx());
         }
     }
 }
