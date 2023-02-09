@@ -150,7 +150,7 @@ impl TxDescriptor {
     }
 
     // Placeholder for API parity with f-series descriptor.
-    pub(super) fn setup(&mut self, _: &[u8]) {
+    pub(super) fn setup(&mut self) {
         // Zero-out all fields in the descriptor
         (0..4).for_each(|n| unsafe { self.inner_raw.write(n, 0) });
     }
