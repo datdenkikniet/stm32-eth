@@ -28,9 +28,9 @@ const NUM_DESCRIPTORS: usize = 4;
 /// On H7s, the ethernet DMA does not have access to the normal ram
 /// so we must explicitly put them in SRAM.
 #[cfg_attr(feature = "stm32h7xx-hal", link_section = ".sram1.eth")]
-static mut TX_DESCRIPTORS: MaybeUninit<[TxDescriptor; NUM_DESCRIPTORS]> = MaybeUninit::uninit();
+static mut TX_DESCRIPTORS: MaybeUninit<[TxDescriptor; 32]> = MaybeUninit::uninit();
 #[cfg_attr(feature = "stm32h7xx-hal", link_section = ".sram1.eth")]
-static mut TX_BUFFERS: MaybeUninit<[[u8; MTU + 2]; NUM_DESCRIPTORS]> = MaybeUninit::uninit();
+static mut TX_BUFFERS: MaybeUninit<[[u8; MTU + 2]; 1]> = MaybeUninit::uninit();
 #[cfg_attr(feature = "stm32h7xx-hal", link_section = ".sram1.eth")]
 static mut RX_DESCRIPTORS: MaybeUninit<[RxDescriptor; NUM_DESCRIPTORS]> = MaybeUninit::uninit();
 #[cfg_attr(feature = "stm32h7xx-hal", link_section = ".sram1.eth")]
@@ -38,8 +38,8 @@ static mut RX_BUFFERS: MaybeUninit<[[u8; MTU + 2]; NUM_DESCRIPTORS]> = MaybeUnin
 
 /// Set up the buffers to be used
 pub fn setup_rings() -> (TxDescriptorRing<'static>, RxDescriptorRing<'static>) {
-    let tx_desc = unsafe { TX_DESCRIPTORS.write([TxDescriptor::new(); NUM_DESCRIPTORS]) };
-    let tx_buf = unsafe { TX_BUFFERS.write([[0u8; MTU + 2]; NUM_DESCRIPTORS]) };
+    let tx_desc = unsafe { TX_DESCRIPTORS.write([TxDescriptor::new(); 32]) };
+    let tx_buf = unsafe { TX_BUFFERS.write([[0u8; MTU + 2]; 1]) };
 
     let rx_desc = unsafe { RX_DESCRIPTORS.write([RxDescriptor::new(); NUM_DESCRIPTORS]) };
     let rx_buf = unsafe { RX_BUFFERS.write([[0u8; MTU + 2]; NUM_DESCRIPTORS]) };

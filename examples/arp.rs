@@ -23,8 +23,6 @@ use stm32_eth::{
 
 pub mod common;
 
-use stm32_eth::dma::TxError;
-
 const PHY_ADDR: u8 = 0;
 
 static TIME: Mutex<RefCell<usize>> = Mutex::new(RefCell::new(0));
@@ -121,7 +119,7 @@ fn main() -> ! {
                 Ok(()) => {
                     defmt::info!("ARP sent");
                 }
-                Err(TxError::WouldBlock) => {
+                Err(_) => {
                     defmt::info!("ARP failed. {}", dma.tx_state())
                 }
             }

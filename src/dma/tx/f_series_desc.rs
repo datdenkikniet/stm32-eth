@@ -1,6 +1,10 @@
 use core::sync::atomic::{self, Ordering};
 
-use crate::dma::{raw_descriptor::RawDescriptor, PacketId};
+use crate::dma::{
+    raw_descriptor::RawDescriptor,
+    ring::{Buffer, BufferIndex, DescriptorEntry},
+    PacketId,
+};
 
 #[cfg(feature = "ptp")]
 use crate::ptp::Timestamp;
@@ -44,6 +48,7 @@ const TXDESC_1_TBS2_MASK: u32 = 0x0fff << TXDESC_1_TBS2_SHIFT;
 pub struct TxDescriptor {
     inner_raw: RawDescriptor,
     packet_id: Option<PacketId>,
+    buffer_idx: Option<BufferIndex>,
     #[cfg(feature = "ptp")]
     cached_timestamp: Option<Timestamp>,
 }
@@ -54,12 +59,27 @@ impl Default for TxDescriptor {
     }
 }
 
+impl DescriptorEntry for TxDescriptor {
+    fn take_buffer(&mut self) -> Option<BufferIndex> {
+        if !self.is_owned() {
+            self.buffer_idx.take()
+        } else {
+            None
+        }
+    }
+
+    fn has_buffer(&self) -> bool {
+        self.buffer_idx.is_some()
+    }
+}
+
 impl TxDescriptor {
     /// Creates an zeroed TxDescriptor.
     pub const fn new() -> Self {
         Self {
             inner_raw: RawDescriptor::new(),
             packet_id: None,
+            buffer_idx: None,
             #[cfg(feature = "ptp")]
             cached_timestamp: None,
         }
@@ -87,8 +107,8 @@ impl TxDescriptor {
     }
 
     /// Pass ownership to the DMA engine
-    pub(super) fn send(&mut self, packet_id: Option<PacketId>, buffer: &[u8]) {
-        self.set_buffer(buffer);
+    pub(super) fn send(&mut self, packet_id: Option<PacketId>, buffer: Buffer, data_len: usize) {
+        self.set_buffer(buffer, data_len);
 
         let extra_flags = if packet_id.is_some() {
             if cfg!(feature = "ptp") {
@@ -127,7 +147,7 @@ impl TxDescriptor {
 
     /// Configure the buffer to use for transmitting,
     /// setting it to `buffer`.
-    fn set_buffer(&mut self, buffer: &[u8]) {
+    fn set_buffer(&mut self, buffer: Buffer, data_len: usize) {
         unsafe {
             let ptr = buffer.as_ptr();
 
@@ -140,8 +160,10 @@ impl TxDescriptor {
                 let w = w & !TXDESC_1_TBS1_MASK;
                 // Configure RBS2 as the provided buffer.
                 let w = w & !TXDESC_1_TBS2_MASK;
-                w | ((buffer.len() as u32) << TXDESC_1_TBS2_SHIFT) & TXDESC_1_TBS2_MASK
+                w | ((data_len as u32) << TXDESC_1_TBS2_SHIFT) & TXDESC_1_TBS2_MASK
             });
+
+            self.buffer_idx = Some(buffer.idx());
         }
     }
 

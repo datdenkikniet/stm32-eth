@@ -1,6 +1,9 @@
 use core::marker::PhantomData;
 
-use super::{raw_descriptor::DescriptorRing, PacketId};
+use super::{
+    ring::{Buffer, EntryRing},
+    PacketId,
+};
 use crate::peripherals::ETHERNET_DMA;
 
 #[cfg(feature = "ptp")]
@@ -31,7 +34,7 @@ pub enum RxError {
 }
 
 /// An RX descriptor ring.
-pub type RxDescriptorRing<'rx> = DescriptorRing<'rx, RxDescriptor>;
+pub type RxDescriptorRing<'rx> = EntryRing<'rx, RxDescriptor>;
 
 pub struct NotRunning;
 pub struct Running;
@@ -88,16 +91,25 @@ impl<'data> RxRing<'data, NotRunning> {
     /// Start the RX ring
     pub fn start(mut self, eth_dma: &ETHERNET_DMA) -> RxRing<'data, Running> {
         // Setup ring
-        for (entry, buffer) in self.ring.descriptors_and_buffers() {
+        // FIXME: do setup, asert that ring buffer length >= descriptors
+
+        let rx_buffers = self.ring.buffer_count().get();
+        let rx_descriptors = self.ring.entry_count();
+
+        assert!(rx_buffers >= rx_descriptors);
+
+        self.ring.buffers_and_entries(|entry, buffer| {
+            // NOTE(unwrap): buffer_count >= entry_count, so buffers will be available.
+            let buffer = buffer.unwrap();
             entry.setup(buffer);
-        }
+        });
 
         self.next_entry = 0;
-        let ring_ptr = self.ring.descriptors_start_address();
+        let ring_ptr = self.ring.entries_start_address();
 
         #[cfg(feature = "f-series")]
         {
-            self.ring.last_descriptor_mut().set_end_of_ring();
+            self.ring.last_entry_mut().set_end_of_ring();
             // Set the RxDma ring start address.
             eth_dma
                 .dmardlar
@@ -217,9 +229,9 @@ impl<'data> RxRing<'data, Running> {
         let entry = self.next_entry;
         let entries_len = self.ring.len();
 
-        let (descriptor, buffer) = self.ring.get(entry);
+        let (descriptor, buffer) = self.ring.entry_buffer(entry).ok_or(RxError::WouldBlock)?;
 
-        let mut res = descriptor.take_received(packet_id, buffer);
+        let mut res = descriptor.take_received(packet_id);
 
         if res.as_mut().err() != Some(&mut RxError::WouldBlock) {
             self.next_entry = (self.next_entry + 1) % entries_len;
@@ -279,15 +291,14 @@ impl<'data> RxRing<'data, Running> {
     }
 
     pub fn available(&mut self) -> bool {
-        let (desc, _) = self.ring.get(self.next_entry);
-        !desc.is_owned()
+        !self.ring.entry(self.next_entry).is_owned()
     }
 }
 
 #[cfg(feature = "ptp")]
 impl<'data, STATE> RxRing<'data, STATE> {
     pub fn get_timestamp_for_id(&self, id: PacketId) -> Result<Timestamp, TimestampError> {
-        for descriptor in self.ring.descriptors() {
+        for descriptor in self.ring.entries() {
             if let (Some(packet_id), Some(timestamp)) =
                 (descriptor.packet_id(), descriptor.timestamp())
             {
@@ -321,12 +332,12 @@ impl RunningState {
 /// as a slice.
 pub struct RxPacket<'a> {
     entry: &'a mut RxDescriptor,
-    buffer: &'a mut [u8],
+    buffer: Buffer,
     #[cfg(feature = "ptp")]
     timestamp: Option<Timestamp>,
 }
 
-impl<'a> core::ops::Deref for RxPacket<'a> {
+impl core::ops::Deref for RxPacket<'_> {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
@@ -334,19 +345,21 @@ impl<'a> core::ops::Deref for RxPacket<'a> {
     }
 }
 
-impl<'a> core::ops::DerefMut for RxPacket<'a> {
+impl core::ops::DerefMut for RxPacket<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.buffer[0..self.entry.frame_length()]
     }
 }
 
-impl<'a> Drop for RxPacket<'a> {
+impl Drop for RxPacket<'_> {
     fn drop(&mut self) {
-        self.entry.set_owned(self.buffer);
+        // SAFETY: we drop `self`, and with it the Buffer contained
+        // within.
+        self.entry.set_owned(unsafe { self.buffer.clone() });
     }
 }
 
-impl<'a> RxPacket<'a> {
+impl RxPacket<'_> {
     /// Pass the received packet back to the DMA engine.
     pub fn free(self) {
         drop(self)

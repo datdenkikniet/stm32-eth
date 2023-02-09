@@ -4,6 +4,10 @@
 #![no_std]
 #![deny(missing_docs)]
 
+#[cfg(all(test, not(target_os = "none")))]
+// For tests
+extern crate std;
+
 #[cfg(not(feature = "device-selected"))]
 compile_error!("No device was selected! Exactly one stm32fxxx feature must be selected.");
 

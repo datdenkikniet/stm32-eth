@@ -13,6 +13,8 @@ pub use smoltcp_phy::*;
 
 pub(crate) mod raw_descriptor;
 
+pub(crate) mod ring;
+
 mod rx;
 pub use rx::{RxDescriptor, RxDescriptorRing, RxError, RxPacket};
 

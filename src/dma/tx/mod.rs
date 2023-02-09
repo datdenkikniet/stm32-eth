@@ -1,6 +1,6 @@
 use core::marker::PhantomData;
 
-use super::{raw_descriptor::DescriptorRing, PacketId};
+use super::{ring::EntryRing, PacketId};
 use crate::peripherals::ETHERNET_DMA;
 
 #[cfg(feature = "ptp")]
@@ -22,13 +22,16 @@ pub struct NotRunning;
 pub struct Running;
 
 /// A TX descriptor ring.
-pub type TxDescriptorRing<'rx> = DescriptorRing<'rx, TxDescriptor>;
+pub type TxDescriptorRing<'rx> = EntryRing<'rx, TxDescriptor>;
 
 /// Errors that can occur during Ethernet TX
 #[derive(Debug, PartialEq)]
 pub enum TxError {
     /// Ring buffer is full
     WouldBlock,
+    /// There are no buffers available
+    /// for transmission
+    NoBufferAvailable,
 }
 
 /// Tx DMA state
@@ -95,15 +98,15 @@ impl<'data> TxRing<'data, NotRunning> {
     /// Start the Tx DMA engine
     pub fn start(mut self, eth_dma: &ETHERNET_DMA) -> TxRing<'data, Running> {
         // Setup ring
-        for descriptor in self.ring.descriptors_mut() {
+        for descriptor in self.ring.entries_mut() {
             descriptor.setup();
         }
 
         #[cfg(feature = "f-series")]
         // Set end of ring register
-        self.ring.last_descriptor_mut().set_end_of_ring();
+        self.ring.last_entry_mut().set_end_of_ring();
 
-        let ring_ptr = self.ring.descriptors_start_address();
+        let ring_ptr = self.ring.entries_start_address();
 
         #[cfg(feature = "f-series")]
         // Register TxDescriptor
@@ -172,14 +175,17 @@ impl<'data> TxRing<'data, Running> {
         let entries_len = self.ring.len();
         let entry_num = self.next_entry;
 
-        let (descriptor, buffer) = self.ring.get(entry_num);
-
-        assert!(length <= buffer.len());
+        let (descriptor, mut buffer) = self
+            .ring
+            .next_entry_and_next_buffer(entry_num)
+            .ok_or(TxError::NoBufferAvailable)?;
 
         if !descriptor.is_owned() {
             let r = f(&mut buffer[0..length]);
 
-            descriptor.send(packet_id, &buffer[0..length]);
+            assert!(length <= buffer.len());
+
+            descriptor.send(packet_id, buffer, length);
 
             self.next_entry = (self.next_entry + 1) % entries_len;
 
@@ -196,8 +202,9 @@ impl<'data> TxRing<'data, Running> {
     /// If this function returns `true`, the next [`TxRing::send`] is
     /// guaranteed to succeed.
     pub fn available(&mut self) -> bool {
-        let (desc, _) = self.ring.get(self.next_entry);
-        !desc.is_owned()
+        // let (desc, _) = self.ring.get_pair(self.next_entry);
+        // !desc.is_owned()
+        todo!()
     }
 
     /// Demand that the DMA engine polls the current `TxDescriptor`
@@ -257,19 +264,18 @@ impl<'data> TxRing<'data, Running> {
 #[cfg(feature = "ptp")]
 impl<'data> TxRing<'data, Running> {
     pub(crate) fn collect_timestamps(&mut self) {
-        for descriptor in self.ring.descriptors_mut() {
+        for descriptor in self.ring.entries_mut() {
             descriptor.attach_timestamp();
         }
     }
 
     pub(crate) fn get_timestamp_for_id(&self, id: PacketId) -> Result<Timestamp, TimestampError> {
-        let descriptor = if let Some(descriptor) =
-            self.ring.descriptors().find(|d| d.packet_id() == Some(&id))
-        {
-            descriptor
-        } else {
-            return Err(TimestampError::IdNotFound);
-        };
+        let descriptor =
+            if let Some(descriptor) = self.ring.entries().find(|d| d.packet_id() == Some(&id)) {
+                descriptor
+            } else {
+                return Err(TimestampError::IdNotFound);
+            };
 
         descriptor
             .timestamp()
