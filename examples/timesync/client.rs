@@ -180,7 +180,7 @@ mod app {
         )
     }
 
-    #[task(shared = [dma, ptp], local = [addend_integrator: f32 = 0.0, start_addend, packet_id: u32 = 0])]
+    #[task(shared = [dma, ptp], local = [addend_integrator: f32 = 0.0, start_addend, packet_id: u32 = 0, prev_time: Option<Timestamp> = None])]
     fn runner(cx: runner::Context) {
         use fugit::ExtU64;
 
@@ -195,6 +195,8 @@ mod app {
             *cx.local.start_addend,
             cx.local.packet_id,
         );
+
+        let prev_time = cx.local.prev_time;
 
         let mut buf = [0u8; 128];
 
@@ -307,6 +309,14 @@ mod app {
 
         ptp.lock(|ptp| {
             let now = ptp.get_time();
+            defmt::info!("{}, {}", prev_time, now);
+
+            if let Some(prev_time) = prev_time {
+                let duration = Timestamp::new_raw(now.raw() - prev_time.raw());
+                defmt::info!("{}", duration);
+            }
+
+            *prev_time = Some(now);
             if offset.seconds() > 0 || offset.nanos() > 200_000 {
                 *addend_integrator = 0.0;
                 defmt::info!("Updating time. Offset {} ", offset);
